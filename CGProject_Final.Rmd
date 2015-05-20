@@ -1,0 +1,241 @@
+---
+title: "Practical Machine Learning Project"
+author: "Carlos Guardia"
+output: html_document
+---
+
+# Introduction
+
+Human Activity Recognition - HAR - has emerged as a key research area in the last years and is gaining increasing attention by the pervasive computing research community (see picture below, that illustrates the increasing number of publications in HAR with wearable accelerometers), especially for the development of context-aware systems. There are many potential applications for HAR, like: elderly monitoring, life log systems for monitoring 
+
+This human activity recognition research has traditionally focused on discriminating between different activities, i.e. to predict "which" activity was performed at a specific point in time (like with the Daily Living Activities dataset above). The approach we propose for the Weight Lifting Exercises dataset is to investigate "how (well)" an activity was performed by the wearer. The "how (well)" investigation has only received little attention so far, even though it potentially provides useful information for a large variety of applications,such as sports training.
+
+In this work (see the paper) we first define quality of execution and investigate three aspects that pertain to qualitative activity recognition: the problem of specifying correct execution, the automatic and robust detection of execution mistakes, and how to provide feedback on the quality of execution to the user. We tried out an on-body sensing approach (dataset here), but also an "ambient sensing approach" (by using Microsoft Kinect - dataset still unavailable)
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+# Getting the Data
+
+## Initializations
+
+```{r, results='hide'}
+rm(list = ls(all = TRUE))
+setwd("c:/carlos/cursosJH/practmachinelearn/ejercicios/")
+library(caret)
+set.seed(37777)
+```
+
+## Data loading
+
+Loading the data previously downloaded from the following url: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+```{r, cache=TRUE}
+dat <- read.csv(file="pml-training.csv",sep=",",header=TRUE, na.strings=c("","NA","#DIV/0!"))
+summary(dat)
+```
+
+## Data splitting
+
+We will split the data into two different datasets, one for training (70% of total data) and one for testing (the rest 30%)
+
+```{r, cache=TRUE}
+g <- createDataPartition(y=dat$classe, p=0.7, list=FALSE)
+# subset data to training
+train <- dat[g,]
+# subset data (the rest) to test
+test <- dat[-g,]
+# dimension of original and training dataset
+rbind("original dataset" = dim(dat),"training set" = dim(train),"testing set" = dim(test))
+```
+
+# Data Cleansing
+
+## Removing columns with NA values
+
+```{r, cache=TRUE}
+trainC <- train[, colSums(is.na(train)) == 0] 
+testC <- test[, colSums(is.na(test)) == 0] 
+# dimension of original and training dataset
+rbind("training set" = dim(trainC),"testing set" = dim(testC))
+```
+
+## Removing near zero variables
+
+```{r, cache=TRUE}
+zvar <- nearZeroVar(trainC,saveMetrics=TRUE)
+trainC <- trainC[,zvar$nzv==FALSE]
+zvar <- nearZeroVar(testC,saveMetrics=TRUE)
+testC <- testC[,zvar$nzv==FALSE]
+# dimension of original and training dataset
+rbind("training set" = dim(trainC),"testing set" = dim(testC))
+```
+
+## Removing meaningless variables
+
+We need to use data closely linked to what we need to predict, so we'll get rid of meaningless data.
+
+```{r, cache=TRUE}
+## Removing the timestamp columns
+z <- which(grepl("timestamp", names(trainC)))
+trainC <- trainC[c(-z)]
+testC <- testC[c(-z)]
+## Removing the window column
+z <- which(grepl("window", names(trainC)))
+trainC <- trainC[c(-z)]
+testC <- testC[c(-z)]
+# Removing the row id column
+trainC <- trainC[-1]
+testC <- testC[-1]
+# dimension of  training  & test dataset
+rbind("training set" = dim(trainC),"testing set" = dim(testC))
+```
+
+# Cross validation
+
+We will split the training set into 2 separate sets for cross validation as a train control method
+
+```{r, cache=TRUE}
+g <- createDataPartition(y=trainC$classe, p=0.8, list=FALSE)
+# subset data to training
+trainCV <- trainC[g,]
+# subset data (the rest) to test
+validCV <- trainC[-g,]
+# dimension of training and validation dataset
+rbind("training cross-valid dataset" = dim(trainCV),"validation set" = dim(validCV))
+```
+
+# Model training
+
+## Random Forest Model
+
+We will be suing Random Forest to fit our model because its high accuracy rate due to its robustness in presence of outliers and covariates and its ability to select bthe meaningful variables. We will use 5-fold cross validation.
+
+```{r, cache=TRUE}
+Sys.time()
+fitControl <- trainControl(## 5-fold CV
+                           method = "repeatedcv",
+                           number = 5,
+                           ## repeated three times
+                           repeats = 3,
+                           classProbs=TRUE)
+modelFit <- train(trainCV$classe ~., data=trainCV, method="rf", trControl=fitControl)
+Sys.time()
+modelFit
+modelFit$finalModel
+```
+
+As it can be seen, the model takes some time to complete (around 27 minutes) but it is extremely accurate: the accuracy of the selected model is `r max(modelFit$results$Accuracy)`. 
+
+The Random Forest model is build using 58  predictors from 159 initial potential predictors and it constructs 500 trees. 
+
+## Random Forest Model with PCA
+
+We will also try a model based on Principal Components Analysis to check if we can improve the model accuracy and reduce the model computation time. To do so, we first need to defactorize the user_name variable into 6 indicator variables.
+
+```{r, cache=TRUE}
+# Defactorizing the user name variable
+trainPCA <- trainCV
+dum <- dummyVars(~ user_name, data=trainPCA)
+t2 <- predict(dum, newdata=trainPCA)
+for (i in 1:dim(t2)[2]) { n <- names(t2[1,][i]); trainPCA[,n]<- t2[,i]}
+# Eliminate factor user_name column 
+trainPCA <- trainPCA[-1]
+```
+
+We will do a PCA analysis on the train data to check how many PCA components would be needed in order to get a good  accuracy of the new model.
+
+```{r}
+# PCA analysis
+u<-prcomp(trainPCA[-53])
+summary(u)
+head(unclass(u$rotation)[, 1:5])
+```
+
+As we can see, with 15 PCA components we can explain the 98.5% of the accumulated variance, so we'll take this number to use it in our model (pcaComp=15).
+
+```{r, cache=TRUE}
+# Model training
+Sys.time()
+fitControl <- trainControl(## 5-fold CV
+                           method = "repeatedcv",
+                           number = 5,
+                           ## repeated three times
+                           repeats = 3,
+                           classProbs=TRUE)
+preP <- preProcess(trainPCA[,-53], method="pca", pcaComp=15, trControl=fitControl)
+traPC <- predict(preP,trainPCA[,-53], trControl=fitControl) 
+modelFitPCA <- train(trainPCA$classe ~., data=traPC, method="rf", trControl=fitControl)
+Sys.time()
+modelFitPCA
+```
+
+As we can see, the maximum accuracy of the PCA model is `r max(modelFitPCA$results$Accuracy)`, lower than the one we got without PCA. The Random Forest model is build using 14 predictors from 159 initial potential predictors. 
+
+We will be using the modelFit for validation and testing. 
+
+## Model Validation
+
+We will validate the accuracy of our model using the validation set. We expect our model out of sample error to be less than 3% and we will estimate the error appropriately with cross-validation and accept the model if the error is lower than 3%.
+
+```{r}
+preVal <- predict(modelFit, validCV)
+cM_VA <- confusionMatrix(validCV$classe, preVal)
+cM_VA
+eose <- 1 - as.numeric(confusionMatrix(validCV$classe, preVal)$overall[1])
+```
+
+The model with the validation set has a very good accuracy (`r cM_VA$overall[1] `). The estimated out-of-sample error is `r eose*100 `%, much lower than 3%, so we accept the model.
+
+We canm see that the model gives a worng prediction in only 18 cases out of 2746.
+
+## Model testing
+
+We will validate the accuracy of our model using the test set:
+
+```{r}
+preTest  <- predict(modelFit, testC)
+cM_TE <- confusionMatrix(testC$classe, preTest)
+cM_TE
+eoseT <- 1 - as.numeric(confusionMatrix(testC$classe, preTest)$overall[1])
+```
+
+The model with the test set also shows a very good accuracy (`r cM_TE$overall[1] `). The estimated out-of-sample error is: `r eoseT*100 `%.
+
+# Predicting the values for the test data
+
+Loading the exercise verification data  previously downloaded from the following url: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r}
+datTest <- read.csv(file="pml-testing.csv",sep=",",header=TRUE, na.strings=c("","NA","#DIV/0!"))
+k<- names(testC)
+datTest <- datTest[, names(datTest) %in% k]
+# Predicted values
+pred <- predict(modelFit, datTest)
+pred
+# Generate de required files
+answers = rep("A", 20)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(pred)
+```
+
+# Appendix: Figures
+
+## Plot of model Error vs Number of trees
+
+```{r}
+plot(modelFit$finalModel, main="Error vs # of trees")
+```
+
+## Plot of model Accuracy vs Number of predictors
+
+```{r}
+plot(modelFit, main="Accuracy vs # of predictors", xlab="Predictors", ylab="Accuracy")
+```
